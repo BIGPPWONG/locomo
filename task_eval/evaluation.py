@@ -199,7 +199,7 @@ def eval_question_answering(qas, eval_key='prediction', metric='f1'):
         if type(line[eval_key]) == list:
             answer = line['answer']
         else:
-            answer = str(line['answer'])
+            answer = str(line['answer']) if line['category'] != 5 else 'Not mentioned in the conversation'
         if line['category'] == 3:
             answer = answer.split(';')[0].strip()
         

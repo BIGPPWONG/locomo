@@ -12,6 +12,7 @@ from task_eval.gpt_utils import get_gpt_answers
 from task_eval.claude_utils import get_claude_answers
 from task_eval.gemini_utils import get_gemini_answers
 from task_eval.hf_llm_utils import init_hf_model, get_hf_answers
+from task_eval.langgraph_utils import get_langgraph_answers, create_langgraph_config
 
 import numpy as np
 import google.generativeai as genai
@@ -30,6 +31,23 @@ def parse_args():
     parser.add_argument('--top-k', type=int, default=5)
     parser.add_argument('--retriever', type=str, default="contriever")
     parser.add_argument('--overwrite', action="store_true")
+
+    # LangGraph/Assistant API specific arguments
+    parser.add_argument('--langgraph-api-type', type=str, default="mock",
+                        help="API type: mock, langgraph_cloud, openai_assistant, custom_endpoint")
+    parser.add_argument('--langgraph-endpoint', type=str, default="",
+                        help="Custom endpoint URL for LangGraph")
+    parser.add_argument('--langgraph-api-key', type=str, default="",
+                        help="API key for LangGraph service")
+    parser.add_argument('--langgraph-max-concurrent', type=int, default=5,
+                        help="Maximum concurrent writes to LangGraph store (default: 5)")
+    parser.add_argument('--skip-langgraph-rag', action="store_true",
+                        help="Skip RAG context injection for LangGraph (useful when context is already stored)")
+    parser.add_argument('--langgraph-ingest-model', type=str, default="nvidia/qwen3-next-80b-a3b-instruct",
+                        help="Model name for RAG context ingestion in LangGraph (e.g., 'text-embedding-ada-002')")
+    parser.add_argument('--langgraph-retrieve-model', type=str, default="nvidia/qwen3-next-80b-a3b-instruct",
+                        help="Model name for answer retrieval in LangGraph (e.g., 'gpt-4')")
+
     args = parser.parse_args()
     return args
 
@@ -56,9 +74,20 @@ def main():
             model_name = "models/gemini-1.0-pro-latest"
 
         gemini_model = genai.GenerativeModel(model_name)
-    
+
     elif any([model_name in args.model for model_name in ['gemma', 'llama', 'mistral']]):
         hf_pipeline, hf_model_name = init_hf_model(args)
+
+    elif 'langgraph' in args.model or 'assistant' in args.model:
+        # Initialize LangGraph/Assistant API config
+        langgraph_config = create_langgraph_config(
+            api_type=args.langgraph_api_type,
+            endpoint=args.langgraph_endpoint,
+            api_key=args.langgraph_api_key,
+            max_concurrent_writes=args.langgraph_max_concurrent,
+            ingest_model=args.langgraph_ingest_model,
+            retrieve_model=args.langgraph_retrieve_model
+        )
 
     else:
         raise NotImplementedError
@@ -92,6 +121,8 @@ def main():
             answers = get_gemini_answers(gemini_model, data, out_data, prediction_key, args)
         elif any([model_name in args.model for model_name in ['gemma', 'llama', 'mistral']]):
             answers = get_hf_answers(data, out_data, args, hf_pipeline, hf_model_name)
+        elif 'langgraph' in args.model or 'assistant' in args.model:
+            answers = get_langgraph_answers(data, out_data, prediction_key, args, langgraph_config)
         else:
             raise NotImplementedError
 
@@ -104,7 +135,7 @@ def main():
 
         out_samples[data['sample_id']] = answers
 
-
+    os.makedirs(os.path.dirname(args.out_file), exist_ok=True)
     with open(args.out_file, 'w') as f:
         json.dump(list(out_samples.values()), f, indent=2)
 
