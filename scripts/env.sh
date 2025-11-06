@@ -16,7 +16,8 @@ SESS_SUMM_OUTPUT_FILE=locomo10_session_summary.json
 PROMPT_DIR=./prompt_examples
 
 # OpenAI API Key
-export OPENAI_API_KEY=
+export OPENAI_API_KEY=sk-placeholder
+export OPENAI_BASE_URL="http://192.168.4.250:4000/v1"
 
 # Google API Key
 export GOOGLE_API_KEY=

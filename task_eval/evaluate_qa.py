@@ -6,7 +6,7 @@ import os, json
 from tqdm import tqdm
 import argparse
 from global_methods import set_openai_key, set_anthropic_key, set_gemini_key
-from task_eval.evaluation import eval_question_answering
+from task_eval.evaluation import eval_question_answering, eval_llm_judge_qa
 from task_eval.evaluation_stats import analyze_aggr_acc
 from task_eval.gpt_utils import get_gpt_answers
 from task_eval.claude_utils import get_claude_answers
@@ -31,6 +31,14 @@ def parse_args():
     parser.add_argument('--top-k', type=int, default=5)
     parser.add_argument('--retriever', type=str, default="contriever")
     parser.add_argument('--overwrite', action="store_true")
+    parser.add_argument('--categories', type=str, default="",
+                        help="Comma-separated list of categories to test (e.g., '1,2,3'). If empty, test all categories")
+    parser.add_argument('--use-llm-judge', action="store_true",
+                        help="Use LLM as judge for evaluation instead of traditional metrics")
+    parser.add_argument('--judge-model', type=str, default="gpt-4o",
+                        help="OpenAI model to use as LLM judge (default: 'gpt-4o')")
+    parser.add_argument('--judge-max-concurrent', type=int, default=5,
+                        help="Maximum concurrent LLM judge calls (default: 5)")
 
     # LangGraph/Assistant API specific arguments
     parser.add_argument('--langgraph-api-type', type=str, default="mock",
@@ -43,6 +51,8 @@ def parse_args():
                         help="Maximum concurrent writes to LangGraph store (default: 5)")
     parser.add_argument('--skip-langgraph-rag', action="store_true",
                         help="Skip RAG context injection for LangGraph (useful when context is already stored)")
+    parser.add_argument('--skip-langgraph-retrieve', action="store_true",
+                        help="Skip retrieve phase for LangGraph (useful when testing without making API calls)")
     parser.add_argument('--langgraph-ingest-model', type=str, default="nvidia/qwen3-next-80b-a3b-instruct",
                         help="Model name for RAG context ingestion in LangGraph (e.g., 'text-embedding-ada-002')")
     parser.add_argument('--langgraph-retrieve-model', type=str, default="nvidia/qwen3-next-80b-a3b-instruct",
@@ -86,7 +96,8 @@ def main():
             api_key=args.langgraph_api_key,
             max_concurrent_writes=args.langgraph_max_concurrent,
             ingest_model=args.langgraph_ingest_model,
-            retrieve_model=args.langgraph_retrieve_model
+            retrieve_model=args.langgraph_retrieve_model,
+            skip_retrieve=args.skip_langgraph_retrieve
         )
 
     else:
@@ -104,13 +115,27 @@ def main():
         out_samples = {}
 
 
-    for data in samples:
+    for data in tqdm(samples):
 
         out_data = {'sample_id': data['sample_id']}
         if data['sample_id'] in out_samples:
             out_data['qa'] = out_samples[data['sample_id']]['qa'].copy()
         else:
             out_data['qa'] = data['qa'].copy()
+
+        # Filter QA pairs by category if specified
+        if args.categories:
+            target_categories = [int(c.strip()) for c in args.categories.split(',')]
+            filtered_qa = []
+            for qa in out_data['qa']:
+                if 'category' in qa and qa['category'] in target_categories:
+                    filtered_qa.append(qa)
+            if not filtered_qa:
+                print(f"Skipping sample {data['sample_id']}: no QA pairs match categories {target_categories}")
+                continue
+            # 过滤原数据和输出数据中的qa
+            out_data['qa'] = filtered_qa
+            data['qa'] = filtered_qa
 
         if 'gpt' in args.model:
             # get answers for each sample
@@ -127,7 +152,13 @@ def main():
             raise NotImplementedError
 
         # evaluate individual QA samples and save the score
-        exact_matches, lengths, recall = eval_question_answering(answers['qa'], prediction_key)
+        if args.use_llm_judge:
+            # Use LLM as judge for evaluation
+            exact_matches, lengths, recall = eval_llm_judge_qa(answers['qa'], prediction_key, args.judge_model, args.judge_max_concurrent)
+        else:
+            # Use traditional evaluation metrics
+            exact_matches, lengths, recall = eval_question_answering(answers['qa'], prediction_key)
+
         for i in range(0, len(answers['qa'])):
             answers['qa'][i][model_key + '_f1'] = round(exact_matches[i], 3)
             if args.use_rag and len(recall) > 0:
