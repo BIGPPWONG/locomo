@@ -745,18 +745,30 @@ async def async_langgraph_call(system_prompt, user_message, config):
         #     graph_id=graph_id,
         #     name="LoCoMo_QA_Assistant"
         # )
-
+        ai_message = None
         # 使用 wait 模式获取完整响应
-        run = await client.runs.wait(
+        # run = await client.runs.wait(
+        #     thread_id,
+        #     graph_id,
+        #     input=input_data,
+        #     config=retrieve_runnable_config,
+        #     on_completion="delete"  # stateless模式完成后删除资源
+        # )
+        # ai_message = run.get("messages", [])[-1].get("content", "")
+
+        # 使用 stream 模式获取完整响应
+        async for chunk in client.runs.stream(
             thread_id,
             graph_id,
             input=input_data,
             config=retrieve_runnable_config,
+            stream_mode=["messages"],
             on_completion="delete"  # stateless模式完成后删除资源
-        )
-        # 提取AI回复
-        ai_message = None
-        ai_message = run.get("messages", [])[-1].get("content", "")
+        ):
+            run = chunk  # 最终的完整响应存储在 run 变量中
+        ai_message = run.data[-1].get("content", "")
+        
+        
         log_with_time(f"AI Message: {ai_message}")
 
         return ai_message if ai_message else "No response generated"
